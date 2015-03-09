@@ -28,8 +28,6 @@
  */
 
 #include <math.h>
-#include <json-c/json.h>
-#include <curl/curl.h>
 
 #include "libavutil/avassert.h"
 #include "libavutil/avstring.h"
@@ -43,194 +41,6 @@
 #include "avfilter.h"
 #include "formats.h"
 #include "internal.h"
-
-
-
-////////////////////////////////////////////////////////////////////////////////////////
-// BEGIN - LIB
-////////////////////////////////////////////////////////////////////////////////////////
-
-#define NMAX_CHANNEL_LENGTH 10
-
-size_t
-        curl_client_write_data(char *buf,
-        size_t size,
-        size_t nmemb,
-        void *userdata);
-
-
-int
-        write_curl(char *url,
-        char *reqtype,
-        json_object *body,
-        char **response
-);
-
-size_t
-curl_client_write_data(char *buf,
-        size_t size,
-        size_t nmemb,
-        void *userdata) {
-    size_t realsize = size * nmemb;
-    if (userdata != NULL) {
-        char **buffer = userdata;
-
-        *buffer = realloc(*buffer, strlen(*buffer) + realsize + 1);
-
-        strncat(*buffer, buf, realsize);
-    }
-    return realsize;
-};
-
-json_object
-        *loudness_to_json(
-
-        const char* influxdb_series_name,
-
-        double loudness_400,
-        double loudness_3000,
-        double integrated_loudness,
-        double loudness_range,
-        double lra_low,
-        double lra_high,
-
-        double *true_peaks,
-        double *true_peaks_per_frame,
-        int nchannel);
-
-int
-write_curl(char *url,
-        char *reqtype,
-        json_object *body,
-        char **response
-) {
-
-    CURLcode c;
-    CURL *handle = curl_easy_init();
-
-    if (reqtype != NULL)
-        curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, reqtype);
-
-    curl_easy_setopt(handle, CURLOPT_TCP_NODELAY, 1);
-    curl_easy_setopt(handle, CURLOPT_URL, url);
-    curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, curl_client_write_data);
-    curl_easy_setopt(handle, CURLOPT_WRITEDATA, response);
-    if (body != NULL)
-        curl_easy_setopt(handle, CURLOPT_POSTFIELDS,
-                json_object_to_json_string(body));
-
-    c = curl_easy_perform(handle);
-
-    if (c == CURLE_OK) {
-        long status_code = 0;
-        if (curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE,
-                &status_code) == CURLE_OK)
-            c = (CURLcode) status_code;
-    }
-
-    curl_easy_cleanup(handle);
-
-    return c;
-}
-
-
-//double loudness_400             ////Momentary loudness
-//double loudness_3000            ///Short term loudness
-//double integrated_loudness;     ///< integrated loudness in LUFS (I)
-//double loudness_range;          ///< loudness range in LU (LRA)
-//double lra_low, lra_high;       ///< low and high LRA values
-//double *true_peaks;             ///< true peaks per channel
-//double *true_peaks_per_frame;   ///< true peaks in a frame per channel
-//double *sample_peaks;           ///< sample peaks per channel <=== !!!! NOT USED @ TRUE PEAK MODE
-
-json_object
-*loudness_to_json(
-
-        const char* influxdb_series_name,
-
-        double loudness_400,
-        double loudness_3000,
-        double integrated_loudness,
-        double loudness_range,
-        double lra_low,
-        double lra_high,
-
-        double *true_peaks,
-        double *true_peaks_per_frame,
-        int nchannel) {
-
-    int i = 0;
-
-    json_object *jo = json_object_new_object();
-
-    /* Name */
-    json_object_object_add(jo, "name", json_object_new_string(influxdb_series_name));
-
-    /* Columns */
-    {
-        json_object *cols = json_object_new_array();
-
-        //json_object_array_add(cols, json_object_new_string("time"));
-        json_object_array_add(cols, json_object_new_string("M"));
-        json_object_array_add(cols, json_object_new_string("S"));
-        json_object_array_add(cols, json_object_new_string("I"));
-        json_object_array_add(cols, json_object_new_string("LRA"));
-        json_object_array_add(cols, json_object_new_string("LRA.low"));
-        json_object_array_add(cols, json_object_new_string("LRA.high"));
-
-        for (i = 0; i < nchannel; i++) {
-            char b[NMAX_CHANNEL_LENGTH] = {0};
-            sprintf(b, "TPK.%d", i);
-            json_object_array_add(cols, json_object_new_string(b));
-        }
-        for (i = 0; i < nchannel; i++) {
-            char b[NMAX_CHANNEL_LENGTH] = {0};
-            sprintf(b, "FTPK.%d", i);
-            json_object_array_add(cols, json_object_new_string(b));
-        }
-        json_object_object_add(jo, "columns", cols);
-    }
-
-    /* Points */
-    {
-        json_object *cols = json_object_new_array();
-        json_object *row = json_object_new_array();
-
-        json_object_array_add(row, json_object_new_double(loudness_400));
-        json_object_array_add(row, json_object_new_double(loudness_3000));
-        json_object_array_add(row, json_object_new_double(integrated_loudness));
-        json_object_array_add(row, json_object_new_double(loudness_range));
-        json_object_array_add(row, json_object_new_double(lra_low));
-        json_object_array_add(row, json_object_new_double(lra_high));
-        for (i = 0; i < nchannel; i++) {
-            json_object_array_add(row, json_object_new_double(true_peaks[i]));
-        }
-        for (i = 0; i < nchannel; i++) {
-            json_object_array_add(row, json_object_new_double(true_peaks_per_frame[i]));
-        }
-
-
-        //json_object_array_add(row, json_object_new_int64(time(0)));
-        //json_object_array_add(row, json_object_new_int64(1425599199));
-        //json_object_array_add(row, json_object_new_string("c"));
-        //json_object_array_add(row, json_object_new_int(1));
-        //json_object_array_add(row, json_object_new_double(3.14));
-
-        json_object_array_add(cols, row);
-        json_object_object_add(jo, "points", cols);
-    }
-
-//    printf("json=%s\n",json_object_to_json_string(jo));
-
-    json_object *sa = json_object_new_array();
-    json_object_array_add(sa, jo);
-
-    return sa;
-}
-
-////////////////////////////////////////////////////////////////////////////////////////
-// END - LIB
-////////////////////////////////////////////////////////////////////////////////////////
 
 #define MAX_CHANNELS 63
 
@@ -293,9 +103,6 @@ typedef struct {
     int swr_linesize;
 #endif
 
-    char *influxdb_url;
-    char *influxdb_series_name;
-
     /* video  */
     int do_video;                   ///< 1 if video output enabled, 0 otherwise
     int w, h;                       ///< size of the video output
@@ -345,8 +152,6 @@ enum {
 #define V AV_OPT_FLAG_VIDEO_PARAM
 #define F AV_OPT_FLAG_FILTERING_PARAM
 static const AVOption ebur128_options[] = {
-    { "influxdb_url",           NULL,        OFFSET(influxdb_url), AV_OPT_TYPE_STRING, .flags = A|V|F },
-    { "influxdb_series_name",     NULL,        OFFSET(influxdb_series_name), AV_OPT_TYPE_STRING, .flags = A|V|F },
     { "video", "set video output", OFFSET(do_video), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, V|F },
     { "size",  "set video size",   OFFSET(w), AV_OPT_TYPE_IMAGE_SIZE, {.str = "640x480"}, 0, 0, V|F },
     { "meter", "set scale meter (+9 to +18)",  OFFSET(meter), AV_OPT_TYPE_INT, {.i64 = 9}, 9, 18, V|F },
@@ -358,7 +163,6 @@ static const AVOption ebur128_options[] = {
         { "none",   "disable any peak mode",   0, AV_OPT_TYPE_CONST, {.i64 = PEAK_MODE_NONE},          INT_MIN, INT_MAX, A|F, "mode" },
         { "sample", "enable peak-sample mode", 0, AV_OPT_TYPE_CONST, {.i64 = PEAK_MODE_SAMPLES_PEAKS}, INT_MIN, INT_MAX, A|F, "mode" },
         { "true",   "enable true-peak mode",   0, AV_OPT_TYPE_CONST, {.i64 = PEAK_MODE_TRUE_PEAKS},    INT_MIN, INT_MAX, A|F, "mode" },
-
     { NULL },
 };
 
@@ -402,7 +206,6 @@ static const uint8_t font_colors[] = {
 
 static void drawtext(AVFrame *pic, int x, int y, int ftid, const uint8_t *color, const char *fmt, ...)
 {
-
     int i;
     char buf[128] = {0};
     const uint8_t *font;
@@ -559,10 +362,6 @@ static int config_audio_input(AVFilterLink *inlink)
 
 static int config_audio_output(AVFilterLink *outlink)
 {
-
-
-
-
     int i;
     AVFilterContext *ctx = outlink->src;
     EBUR128Context *ebur128 = ctx->priv;
@@ -656,31 +455,8 @@ static struct hist_entry *get_histogram(void)
 
 static av_cold int init(AVFilterContext *ctx)
 {
-
     EBUR128Context *ebur128 = ctx->priv;
     AVFilterPad pad;
-
-    if(ebur128->influxdb_url || ebur128->influxdb_series_name){
-
-        if(ebur128->influxdb_url){
-            av_log(ctx,AV_LOG_INFO,"influxdb_url=%s\n", ebur128->influxdb_url);
-        }
-        else{
-            av_log(ctx,AV_LOG_ERROR,"When influxdb_series_name given, influxdb_url must exist.\n");
-            return AVERROR(EINVAL);
-        }
-
-        if(ebur128->influxdb_series_name){
-            av_log(ctx,AV_LOG_INFO,"influxdb_series_name=%s\n", ebur128->influxdb_series_name);
-        }
-        else{
-            av_log(ctx,AV_LOG_ERROR,"When influxdb_url given, influxdb_series_name must exist.\n");
-            return AVERROR(EINVAL);
-        }
-    }
-    else{
-        av_log(ctx,AV_LOG_WARNING,"influxdb_url & influxdb_series_name is null, skip logging to influxdb");
-    }
 
     if (ebur128->loglevel != AV_LOG_INFO &&
         ebur128->loglevel != AV_LOG_VERBOSE) {
@@ -1008,26 +784,6 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
                 SET_META_PEAK(sample, SAMPLES);
                 SET_META_PEAK(true,   TRUE);
             }
-
-            if(ebur128->influxdb_url){
-
-
-
-                json_object *jo = loudness_to_json( (const char*) ebur128->influxdb_series_name, loudness_400, loudness_3000, ebur128->integrated_loudness, ebur128->loudness_range, ebur128->lra_low, ebur128->lra_high, ebur128->true_peaks, ebur128->true_peaks_per_frame, nb_channels);
-                int status_code = write_curl(ebur128->influxdb_url, 0, jo, 0);
-
-                if(status_code!=200){
-                    av_log(ctx,AV_LOG_WARNING, "fail to write influxdb=%s status_code=%d\n",ebur128->influxdb_url,status_code);
-                }
-
-
-                //free json object
-                json_object_put(jo);
-            }
-
-
-
-
 
             av_log(ctx, ebur128->loglevel, "t: %-10s " LOG_FMT,
                    av_ts2timestr(pts, &outlink->time_base),
